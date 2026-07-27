@@ -264,6 +264,7 @@
 
     ws.onmessage = function(ev) {
       var msg = JSON.parse(ev.data);
+      logDebug('RAW message', msg);
 
       if (msg.error) {
         logDebug('Error message received', msg.error);
