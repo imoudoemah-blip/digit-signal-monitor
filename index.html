@@ -102,6 +102,11 @@
   </div>
 
   <p class="footnote">Digits on these indices are generated independently each tick, so this view describes what has happened, not what will happen next. Nothing here is trading advice.</p>
+
+  <details style="margin-top:1.5rem">
+    <summary style="cursor:pointer;font-size:12px;color:var(--text-dim)">Debug info (tap to expand)</summary>
+    <pre id="debugPanel" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;margin-top:8px">Waiting for first response…</pre>
+  </details>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -244,9 +249,17 @@
 
     var triedFallback = false;
 
+    var debugPanel = document.getElementById('debugPanel');
+    function logDebug(label, obj) {
+      var line = '[' + new Date().toISOString().slice(11,19) + '] ' + label + (obj !== undefined ? ': ' + JSON.stringify(obj) : '');
+      debugPanel.textContent = (debugPanel.textContent === 'Waiting for first response…' ? '' : debugPanel.textContent + '\n') + line;
+    }
+
     ws.onopen = function() {
       status.textContent = 'Checking which symbols are available…';
+      logDebug('WebSocket opened');
       ws.send(JSON.stringify({ active_symbols: 'brief', product_type: 'basic', landing_company_short: 'svg' }));
+      logDebug('Sent active_symbols request (landing_company_short: svg)');
     };
 
     ws.onmessage = function(ev) {
@@ -254,13 +267,18 @@
 
       if (msg.msg_type === 'active_symbols') {
         var list = msg.active_symbols || [];
+        var marketsSeen = {};
+        list.forEach(function(s){ marketsSeen[s.market] = (marketsSeen[s.market]||0) + 1; });
         var synthetics = list.filter(function(s){
           return s.market === 'synthetic_index';
         });
 
+        logDebug('active_symbols reply', { total: list.length, marketsSeen: marketsSeen, synthCount: synthetics.length, sample: list.slice(0,2) });
+
         if (!synthetics.length && !triedFallback) {
           // Retry without forcing a landing company, in case 'svg' itself was rejected
           triedFallback = true;
+          logDebug('No synthetics found, retrying without landing_company_short');
           ws.send(JSON.stringify({ active_symbols: 'brief' }));
           return;
         }
@@ -301,18 +319,21 @@
       }
 
       if (msg.error) {
+        logDebug('Error message received', msg.error);
         status.textContent = 'Feed error: ' + msg.error.message;
         dot.style.background = '#e34948';
       }
     };
 
-    ws.onclose = function() {
+    ws.onclose = function(ev) {
+      logDebug('WebSocket closed', { code: ev.code, reason: ev.reason });
       status.textContent = 'Disconnected — reconnecting…';
       dot.style.background = '#eda100';
       setTimeout(connect, 3000);
     };
 
     ws.onerror = function() {
+      logDebug('WebSocket error event fired');
       ws.close();
     };
   }
