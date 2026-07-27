@@ -265,6 +265,13 @@
     ws.onmessage = function(ev) {
       var msg = JSON.parse(ev.data);
 
+      if (msg.error) {
+        logDebug('Error message received', msg.error);
+        status.textContent = 'Feed error: ' + msg.error.message;
+        dot.style.background = '#e34948';
+        return;
+      }
+
       if (msg.msg_type === 'active_symbols') {
         var list = msg.active_symbols || [];
         var marketsSeen = {};
