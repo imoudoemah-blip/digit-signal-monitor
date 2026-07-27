@@ -246,7 +246,7 @@
 
     ws.onopen = function() {
       status.textContent = 'Checking which symbols are available…';
-      ws.send(JSON.stringify({ active_symbols: 'brief', landing_company: 'svg' }));
+      ws.send(JSON.stringify({ active_symbols: 'brief', product_type: 'basic', landing_company_short: 'svg' }));
     };
 
     ws.onmessage = function(ev) {
