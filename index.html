@@ -242,18 +242,29 @@
   function connect() {
     ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
 
+    var triedFallback = false;
+
     ws.onopen = function() {
       status.textContent = 'Checking which symbols are available…';
-      ws.send(JSON.stringify({ active_symbols: 'brief', product_type: 'basic' }));
+      ws.send(JSON.stringify({ active_symbols: 'brief', landing_company: 'svg' }));
     };
 
     ws.onmessage = function(ev) {
       var msg = JSON.parse(ev.data);
 
-      if (msg.msg_type === 'active_symbols' && msg.active_symbols) {
-        var synthetics = msg.active_symbols.filter(function(s){
+      if (msg.msg_type === 'active_symbols') {
+        var list = msg.active_symbols || [];
+        var synthetics = list.filter(function(s){
           return s.market === 'synthetic_index';
         });
+
+        if (!synthetics.length && !triedFallback) {
+          // Retry without forcing a landing company, in case 'svg' itself was rejected
+          triedFallback = true;
+          ws.send(JSON.stringify({ active_symbols: 'brief' }));
+          return;
+        }
+
         populateSymbolSelect(synthetics);
 
         var match = synthetics.find(function(s){ return s.symbol === PREFERRED_SYMBOL; });
@@ -311,5 +322,3 @@
 </script>
 </body>
 </html>
-    
-  
