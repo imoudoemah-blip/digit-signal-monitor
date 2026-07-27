@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digit signal monitor — 1HZ75V</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #131722;
+    --border: #232838;
+    --text: #e8e6df;
+    --text-dim: #8b8f9e;
+    --accent: #2a78d6;
+    --target: #eb6834;
+    --good: #1baf7a;
+    --warn: #eda100;
+    --bad: #e34948;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 2rem 1.5rem 4rem;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin: 0 0 1.5rem; }
+  .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 1.5rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+  .status { font-size: 13px; color: var(--text-dim); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+  .card .label { font-size: 12px; color: var(--text-dim); margin: 0 0 4px; }
+  .card .value { font-size: 22px; font-weight: 600; margin: 0; }
+  .section-label { font-size: 13px; color: var(--text-dim); margin: 0 0 8px; }
+  .tape { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 1.5rem; }
+  .digit-cell {
+    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; font-size: 13px; font-weight: 600; background: var(--card); color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .digit-cell.target { background: rgba(235,104,52,0.15); color: var(--target); border-color: var(--target); }
+  .chart-wrap { position: relative; width: 100%; height: 240px; margin-bottom: 1.5rem; }
+  .signal-box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+  .signal-box .label { font-size: 12px; color: var(--text-dim); margin: 0 0 4px; }
+  .signal-box .value { font-size: 14px; margin: 0; line-height: 1.5; }
+  .footnote { font-size: 12px; color: var(--text-dim); margin: 0; }
+  .bot-config { font-size: 12px; color: var(--text-dim); margin: 0 0 1.5rem; }
+  .bot-config code { background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Digit signal monitor</h1>
+  <p class="sub">Live tick feed for Volatility 75 (1s) index — read-only, public data</p>
+  <p class="bot-config">Matches this bot's config: symbol <code>1HZ75V</code>, contract <code>DIGITMATCH</code>, target digit <code>6</code>, stake <code>50</code>, duration <code>1 tick</code></p>
+
+  <div class="status-row">
+    <span class="dot" id="dot"></span>
+    <span class="status" id="status">Connecting…</span>
+  </div>
+
+  <div class="grid">
+    <div class="card"><p class="label">Symbol</p><p class="value">1HZ75V</p></div>
+    <div class="card"><p class="label">Target digit</p><p class="value">6</p></div>
+    <div class="card"><p class="label">Ticks seen</p><p class="value" id="tickCount">0</p></div>
+    <div class="card"><p class="label">Digit 6 frequency</p><p class="value" id="targetFreq">–</p></div>
+  </div>
+
+  <p class="section-label">Last 30 ticks (last digit)</p>
+  <div class="tape" id="tape"></div>
+
+  <p class="section-label">Digit frequency over rolling window (expected 10% each, dashed line)</p>
+  <div class="chart-wrap">
+    <canvas id="freqChart" role="img" aria-label="Bar chart of frequency percent for digits 0 through 9 over the rolling window">Frequency per digit, updates live.</canvas>
+  </div>
+
+  <div class="signal-box">
+    <p class="label">Reading</p>
+    <p class="value" id="signalText">Waiting for enough ticks to form a reading…</p>
+  </div>
+
+  <p class="footnote">Digits on this index are generated independently each tick, so this view describes what has happened, not what will happen next. Nothing here is trading advice.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function(){
+  var WINDOW = 100;
+  var TARGET = 6;
+  var digits = [];
+  var counts = new Array(10).fill(0);
+  var tickCount = 0;
+
+  var barColor = '#2a78d6';
+  var targetColor = '#eb6834';
+
+  var ctx = document.getElementById('freqChart');
+  var chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['0','1','2','3','4','5','6','7','8','9'],
+      datasets: [{ label: 'Frequency %', data: new Array(10).fill(0), backgroundColor: new Array(10).fill(barColor), borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, suggestedMax: 25, ticks: { color: '#8b8f9e', callback: function(v){ return v + '%'; } }, grid: { color: '#232838' } },
+        x: { ticks: { color: '#8b8f9e' }, grid: { display: false } }
+      }
+    },
+    plugins: [{
+      id: 'baseline',
+      afterDraw: function(c) {
+        var yScale = c.scales.y;
+        var xScale = c.scales.x;
+        var y = yScale.getPixelForValue(10);
+        var ctx2 = c.ctx;
+        ctx2.save();
+        ctx2.setLineDash([4,4]);
+        ctx2.strokeStyle = '#8b8f9e';
+        ctx2.beginPath();
+        ctx2.moveTo(xScale.left, y);
+        ctx2.lineTo(xScale.right, y);
+        ctx2.stroke();
+        ctx2.restore();
+      }
+    }]
+  });
+
+  function render() {
+    document.getElementById('tickCount').textContent = tickCount;
+    var total = digits.length;
+    var colors = new Array(10).fill(barColor);
+    colors[TARGET] = targetColor;
+    var pct = counts.map(function(c){ return total ? Math.round((c/total)*1000)/10 : 0; });
+    chart.data.datasets[0].data = pct;
+    chart.data.datasets[0].backgroundColor = colors;
+    chart.update('none');
+
+    var targetPct = pct[TARGET];
+    document.getElementById('targetFreq').textContent = total ? targetPct + '%' : '–';
+
+    var tape = document.getElementById('tape');
+    tape.innerHTML = '';
+    digits.slice(-30).forEach(function(d){
+      var el = document.createElement('div');
+      el.textContent = d;
+      el.className = 'digit-cell' + (d === TARGET ? ' target' : '');
+      tape.appendChild(el);
+    });
+
+    var signalText = document.getElementById('signalText');
+    if (total < 30) {
+      signalText.textContent = 'Waiting for enough ticks to form a reading (' + total + '/30 minimum)…';
+    } else {
+      var diff = targetPct - 10;
+      var band = diff > 4 ? 'running above the 10% baseline' : diff < -4 ? 'running below the 10% baseline' : 'sitting close to the 10% baseline';
+      signalText.textContent = 'Over the last ' + total + ' ticks, digit 6 is ' + band + ' (' + targetPct + '% observed). This is a description of recent history, not a forecast.';
+    }
+  }
+
+  function connect() {
+    var ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
+    var dot = document.getElementById('dot');
+    var status = document.getElementById('status');
+
+    ws.onopen = function() {
+      status.textContent = 'Connected — streaming live ticks';
+      dot.style.background = '#1baf7a';
+      ws.send(JSON.stringify({ ticks: '1HZ75V', subscribe: 1 }));
+    };
+    ws.onmessage = function(ev) {
+      var msg = JSON.parse(ev.data);
+      if (msg.msg_type === 'tick' && msg.tick) {
+        var quoteStr = String(msg.tick.quote);
+        var lastChar = quoteStr.replace('.', '').slice(-1);
+        var d = parseInt(lastChar, 10);
+        if (!isNaN(d)) {
+          digits.push(d);
+          counts[d]++;
+          tickCount++;
+          if (digits.length > WINDOW) {
+            var removed = digits.shift();
+            counts[removed]--;
+          }
+          render();
+        }
+      }
+      if (msg.error) {
+        status.textContent = 'Feed error: ' + msg.error.message;
+        dot.style.background = '#e34948';
+      }
+    };
+    ws.onclose = function() {
+      status.textContent = 'Disconnected — reconnecting…';
+      dot.style.background = '#eda100';
+      setTimeout(connect, 3000);
+    };
+    ws.onerror = function() {
+      ws.close();
+    };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>
