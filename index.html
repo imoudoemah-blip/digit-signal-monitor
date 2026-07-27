@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Digit signal monitor — 1HZ75V</title>
+<title>Digit signal monitor</title>
 <style>
   :root {
     --bg: #0b0e14;
@@ -28,9 +28,15 @@
   .wrap { max-width: 780px; margin: 0 auto; }
   h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
   .sub { color: var(--text-dim); font-size: 13px; margin: 0 0 1.5rem; }
-  .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 1.5rem; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+  .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 1rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
   .status { font-size: 13px; color: var(--text-dim); }
+  .picker-row { display: flex; align-items: center; gap: 8px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .picker-row label { font-size: 13px; color: var(--text-dim); }
+  select {
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px;
+  }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
   .card .label { font-size: 12px; color: var(--text-dim); margin: 0 0 4px; }
@@ -50,21 +56,33 @@
   .footnote { font-size: 12px; color: var(--text-dim); margin: 0; }
   .bot-config { font-size: 12px; color: var(--text-dim); margin: 0 0 1.5rem; }
   .bot-config code { background: var(--card); padding: 2px 6px; border-radius: 4px; color: var(--text); }
+  .unavailable-box {
+    background: rgba(227,73,72,0.08); border: 1px solid var(--bad); border-radius: 10px;
+    padding: 1rem; margin-bottom: 1.5rem; font-size: 13px; line-height: 1.6;
+  }
+  .unavailable-box strong { color: var(--bad); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Digit signal monitor</h1>
-  <p class="sub">Live tick feed for Volatility 75 (1s) index — read-only, public data</p>
-  <p class="bot-config">Matches this bot's config: symbol <code>1HZ75V</code>, contract <code>DIGITMATCH</code>, target digit <code>6</code>, stake <code>50</code>, duration <code>1 tick</code></p>
+  <p class="sub">Live tick feed for Deriv synthetic indices — read-only, public data</p>
+  <p class="bot-config">Bot config: contract <code>DIGITMATCH</code>, target digit <code>6</code>, stake <code>50</code>, duration <code>1 tick</code></p>
 
   <div class="status-row">
     <span class="dot" id="dot"></span>
     <span class="status" id="status">Connecting…</span>
   </div>
 
+  <div id="unavailableBox" class="unavailable-box" style="display:none"></div>
+
+  <div class="picker-row">
+    <label for="symbolSelect">Symbol</label>
+    <select id="symbolSelect" disabled><option>Loading available symbols…</option></select>
+  </div>
+
   <div class="grid">
-    <div class="card"><p class="label">Symbol</p><p class="value">1HZ75V</p></div>
+    <div class="card"><p class="label">Symbol</p><p class="value" id="symbolLabel">–</p></div>
     <div class="card"><p class="label">Target digit</p><p class="value">6</p></div>
     <div class="card"><p class="label">Ticks seen</p><p class="value" id="tickCount">0</p></div>
     <div class="card"><p class="label">Digit 6 frequency</p><p class="value" id="targetFreq">–</p></div>
@@ -83,20 +101,31 @@
     <p class="value" id="signalText">Waiting for enough ticks to form a reading…</p>
   </div>
 
-  <p class="footnote">Digits on this index are generated independently each tick, so this view describes what has happened, not what will happen next. Nothing here is trading advice.</p>
+  <p class="footnote">Digits on these indices are generated independently each tick, so this view describes what has happened, not what will happen next. Nothing here is trading advice.</p>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 (function(){
-  var WINDOW = 100;
+  var PREFERRED_SYMBOL = '1HZ75V';
   var TARGET = 6;
+  var WINDOW = 100;
+
   var digits = [];
   var counts = new Array(10).fill(0);
   var tickCount = 0;
+  var ws = null;
+  var currentSymbol = null;
+  var tickSubId = null;
 
   var barColor = '#2a78d6';
   var targetColor = '#eb6834';
+
+  var dot = document.getElementById('dot');
+  var status = document.getElementById('status');
+  var symbolSelect = document.getElementById('symbolSelect');
+  var symbolLabel = document.getElementById('symbolLabel');
+  var unavailableBox = document.getElementById('unavailableBox');
 
   var ctx = document.getElementById('freqChart');
   var chart = new Chart(ctx, {
@@ -132,6 +161,13 @@
     }]
   });
 
+  function resetCounters() {
+    digits = [];
+    counts = new Array(10).fill(0);
+    tickCount = 0;
+    render();
+  }
+
   function render() {
     document.getElementById('tickCount').textContent = tickCount;
     var total = digits.length;
@@ -164,19 +200,79 @@
     }
   }
 
+  function subscribeSymbol(symbol) {
+    if (tickSubId) {
+      ws.send(JSON.stringify({ forget: tickSubId }));
+      tickSubId = null;
+    }
+    currentSymbol = symbol;
+    symbolLabel.textContent = symbol;
+    resetCounters();
+    status.textContent = 'Connected — streaming live ticks';
+    dot.style.background = '#1baf7a';
+    ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
+  }
+
+  function showUnavailable(requested, available) {
+    dot.style.background = '#e34948';
+    status.textContent = 'Requested symbol not available';
+    unavailableBox.style.display = 'block';
+    var list = available.slice(0, 8).map(function(s){ return s.display_name + ' (' + s.symbol + ')'; }).join(', ');
+    unavailableBox.innerHTML = '<strong>' + requested + '</strong> is not offered on this connection right now (this depends on the region the feed resolves your browser to). ' +
+      (available.length ? 'Available synthetic indices for this connection: ' + list + '. Pick one from the dropdown above.' : 'No synthetic indices are available on this connection at all.');
+  }
+
+  function populateSymbolSelect(symbols) {
+    symbolSelect.innerHTML = '';
+    symbols.forEach(function(s){
+      var opt = document.createElement('option');
+      opt.value = s.symbol;
+      opt.textContent = s.display_name + ' (' + s.symbol + ')';
+      symbolSelect.appendChild(opt);
+    });
+    symbolSelect.disabled = symbols.length === 0;
+  }
+
+  symbolSelect.addEventListener('change', function(){
+    if (ws && ws.readyState === WebSocket.OPEN && symbolSelect.value) {
+      subscribeSymbol(symbolSelect.value);
+    }
+  });
+
   function connect() {
-    var ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
-    var dot = document.getElementById('dot');
-    var status = document.getElementById('status');
+    ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
 
     ws.onopen = function() {
-      status.textContent = 'Connected — streaming live ticks';
-      dot.style.background = '#1baf7a';
-      ws.send(JSON.stringify({ ticks: '1HZ75V', subscribe: 1 }));
+      status.textContent = 'Checking which symbols are available…';
+      ws.send(JSON.stringify({ active_symbols: 'brief', product_type: 'basic' }));
     };
+
     ws.onmessage = function(ev) {
       var msg = JSON.parse(ev.data);
+
+      if (msg.msg_type === 'active_symbols' && msg.active_symbols) {
+        var synthetics = msg.active_symbols.filter(function(s){
+          return s.market === 'synthetic_index';
+        });
+        populateSymbolSelect(synthetics);
+
+        var match = synthetics.find(function(s){ return s.symbol === PREFERRED_SYMBOL; });
+        if (match) {
+          symbolSelect.value = PREFERRED_SYMBOL;
+          subscribeSymbol(PREFERRED_SYMBOL);
+        } else {
+          showUnavailable(PREFERRED_SYMBOL, synthetics);
+          if (synthetics.length) {
+            symbolSelect.value = synthetics[0].symbol;
+          }
+        }
+        return;
+      }
+
       if (msg.msg_type === 'tick' && msg.tick) {
+        if (!tickSubId && msg.subscription && msg.subscription.id) {
+          tickSubId = msg.subscription.id;
+        }
         var quoteStr = String(msg.tick.quote);
         var lastChar = quoteStr.replace('.', '').slice(-1);
         var d = parseInt(lastChar, 10);
@@ -190,17 +286,21 @@
           }
           render();
         }
+        return;
       }
+
       if (msg.error) {
         status.textContent = 'Feed error: ' + msg.error.message;
         dot.style.background = '#e34948';
       }
     };
+
     ws.onclose = function() {
       status.textContent = 'Disconnected — reconnecting…';
       dot.style.background = '#eda100';
       setTimeout(connect, 3000);
     };
+
     ws.onerror = function() {
       ws.close();
     };
