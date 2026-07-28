@@ -115,6 +115,18 @@
   var PREFERRED_SYMBOL = '1HZ75V';
   var TARGET = 6;
   var WINDOW = 100;
+  var KNOWN_SYNTHETICS = [
+    { symbol: '1HZ75V', display_name: 'Volatility 75 (1s) Index' },
+    { symbol: 'R_75',   display_name: 'Volatility 75 Index' },
+    { symbol: '1HZ100V', display_name: 'Volatility 100 (1s) Index' },
+    { symbol: 'R_100',  display_name: 'Volatility 100 Index' },
+    { symbol: '1HZ50V', display_name: 'Volatility 50 (1s) Index' },
+    { symbol: 'R_50',   display_name: 'Volatility 50 Index' },
+    { symbol: '1HZ25V', display_name: 'Volatility 25 (1s) Index' },
+    { symbol: 'R_25',   display_name: 'Volatility 25 Index' },
+    { symbol: '1HZ10V', display_name: 'Volatility 10 (1s) Index' },
+    { symbol: 'R_10',   display_name: 'Volatility 10 Index' }
+  ];
 
   var digits = [];
   var counts = new Array(10).fill(0);
@@ -218,13 +230,13 @@
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
   }
 
-  function showUnavailable(requested, available) {
+  function showUnavailable(requested, available, errorMessage) {
     dot.style.background = '#e34948';
     status.textContent = 'Requested symbol not available';
     unavailableBox.style.display = 'block';
-    var list = available.slice(0, 8).map(function(s){ return s.display_name + ' (' + s.symbol + ')'; }).join(', ');
-    unavailableBox.innerHTML = '<strong>' + requested + '</strong> is not offered on this connection right now (this depends on the region the feed resolves your browser to). ' +
-      (available.length ? 'Available synthetic indices for this connection: ' + list + '. Pick one from the dropdown above.' : 'No synthetic indices are available on this connection at all.');
+    unavailableBox.innerHTML = '<strong>' + requested + '</strong> was rejected by the feed' +
+      (errorMessage ? ' — reason given: "' + errorMessage + '"' : '') +
+      '. Try a different index from the dropdown above (these are known valid symbols, not a live-checked list).';
   }
 
   function populateSymbolSelect(symbols) {
@@ -247,8 +259,6 @@
   function connect() {
     ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
 
-    var triedFallback = false;
-
     var debugPanel = document.getElementById('debugPanel');
     function logDebug(label, obj) {
       var line = '[' + new Date().toISOString().slice(11,19) + '] ' + label + (obj !== undefined ? ': ' + JSON.stringify(obj) : '');
@@ -256,10 +266,11 @@
     }
 
     ws.onopen = function() {
-      status.textContent = 'Checking which symbols are available…';
       logDebug('WebSocket opened');
-      ws.send(JSON.stringify({ active_symbols: 'brief', product_type: 'basic', landing_company_short: 'svg' }));
-      logDebug('Sent active_symbols request (landing_company_short: svg)');
+      status.textContent = 'Requesting live ticks…';
+      populateSymbolSelect(KNOWN_SYNTHETICS);
+      symbolSelect.value = PREFERRED_SYMBOL;
+      subscribeSymbol(PREFERRED_SYMBOL);
     };
 
     ws.onmessage = function(ev) {
@@ -267,46 +278,14 @@
       logDebug('RAW message', msg);
 
       if (msg.error) {
-        logDebug('Error message received', msg.error);
         status.textContent = 'Feed error: ' + msg.error.message;
         dot.style.background = '#e34948';
-        return;
-      }
-
-      if (msg.msg_type === 'active_symbols') {
-        var list = msg.active_symbols || [];
-        var marketsSeen = {};
-        list.forEach(function(s){ marketsSeen[s.market] = (marketsSeen[s.market]||0) + 1; });
-        var synthetics = list.filter(function(s){
-          return s.market === 'synthetic_index';
-        });
-
-        logDebug('active_symbols reply', { total: list.length, marketsSeen: marketsSeen, synthCount: synthetics.length, sample: list.slice(0,2) });
-
-        if (!synthetics.length && !triedFallback) {
-          // Retry without forcing a landing company, in case 'svg' itself was rejected
-          triedFallback = true;
-          logDebug('No synthetics found, retrying without landing_company_short');
-          ws.send(JSON.stringify({ active_symbols: 'brief' }));
-          return;
-        }
-
-        populateSymbolSelect(synthetics);
-
-        var match = synthetics.find(function(s){ return s.symbol === PREFERRED_SYMBOL; });
-        if (match) {
-          symbolSelect.value = PREFERRED_SYMBOL;
-          subscribeSymbol(PREFERRED_SYMBOL);
-        } else {
-          showUnavailable(PREFERRED_SYMBOL, synthetics);
-          if (synthetics.length) {
-            symbolSelect.value = synthetics[0].symbol;
-          }
-        }
+        showUnavailable(currentSymbol || PREFERRED_SYMBOL, KNOWN_SYNTHETICS, msg.error.message);
         return;
       }
 
       if (msg.msg_type === 'tick' && msg.tick) {
+        unavailableBox.style.display = 'none';
         if (!tickSubId && msg.subscription && msg.subscription.id) {
           tickSubId = msg.subscription.id;
         }
@@ -324,12 +303,6 @@
           render();
         }
         return;
-      }
-
-      if (msg.error) {
-        logDebug('Error message received', msg.error);
-        status.textContent = 'Feed error: ' + msg.error.message;
-        dot.style.background = '#e34948';
       }
     };
 
