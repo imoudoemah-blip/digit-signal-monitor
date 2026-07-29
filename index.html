@@ -85,7 +85,13 @@
     <div class="card"><p class="label">Symbol</p><p class="value" id="symbolLabel">–</p></div>
     <div class="card"><p class="label">Target digit</p><p class="value">6</p></div>
     <div class="card"><p class="label">Ticks seen</p><p class="value" id="tickCount">0</p></div>
-    <div class="card"><p class="label">Digit 6 frequency</p><p class="value" id="targetFreq">–</p></div>
+    <div class="card"><p class="label">Matches this session</p><p class="value" id="matchCount">0 (0%)</p></div>
+  </div>
+
+  <div id="matchFlash" style="background:var(--card); border:2px solid var(--border); border-radius:10px; padding:1.25rem; margin-bottom:1.5rem; text-align:center; transition:all 0.15s ease;">
+    <p style="font-size:13px; color:var(--text-dim); margin:0 0 4px">Live last-digit feed</p>
+    <p id="latestDigit" style="font-size:48px; font-weight:700; margin:0; line-height:1;">–</p>
+    <p id="matchStatus" style="font-size:13px; color:var(--text-dim); margin:6px 0 0">Waiting for first tick…</p>
   </div>
 
   <p class="section-label">Last 30 ticks (last digit)</p>
@@ -131,6 +137,7 @@
   var digits = [];
   var counts = new Array(10).fill(0);
   var tickCount = 0;
+  var matchCount = 0;
   var ws = null;
   var currentSymbol = null;
   var tickSubId = null;
@@ -182,7 +189,30 @@
     digits = [];
     counts = new Array(10).fill(0);
     tickCount = 0;
+    matchCount = 0;
     render();
+  }
+
+  function flashLatest(d) {
+    var box = document.getElementById('matchFlash');
+    var digitEl = document.getElementById('latestDigit');
+    var statusEl = document.getElementById('matchStatus');
+    var isMatch = d === TARGET;
+
+    digitEl.textContent = d;
+    digitEl.style.color = isMatch ? targetColor : 'var(--text)';
+
+    if (isMatch) {
+      box.style.borderColor = targetColor;
+      box.style.background = 'rgba(235,104,52,0.12)';
+      statusEl.textContent = 'Match — digit ' + TARGET + ' just landed';
+      statusEl.style.color = targetColor;
+    } else {
+      box.style.borderColor = 'var(--border)';
+      box.style.background = 'var(--card)';
+      statusEl.textContent = 'No match this tick';
+      statusEl.style.color = 'var(--text-dim)';
+    }
   }
 
   function render() {
@@ -196,7 +226,9 @@
     chart.update('none');
 
     var targetPct = pct[TARGET];
-    document.getElementById('targetFreq').textContent = total ? targetPct + '%' : '–';
+
+    var matchEl = document.getElementById('matchCount');
+    matchEl.textContent = matchCount + ' (' + (total ? Math.round((matchCount/total)*1000)/10 : 0) + '%)';
 
     var tape = document.getElementById('tape');
     tape.innerHTML = '';
@@ -296,11 +328,13 @@
           digits.push(d);
           counts[d]++;
           tickCount++;
+          if (d === TARGET) matchCount++;
           if (digits.length > WINDOW) {
             var removed = digits.shift();
             counts[removed]--;
           }
           render();
+          flashLatest(d);
         }
         return;
       }
