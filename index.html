@@ -78,7 +78,7 @@
 
   <div class="picker-row">
     <label for="symbolSelect">Symbol</label>
-    <select id="symbolSelect" disabled><option>Loading available symbols…</option></select>
+    <select id="symbolSelect" disabled><option>Connecting…</option></select>
   </div>
 
   <div class="grid">
@@ -257,7 +257,7 @@
   });
 
   function connect() {
-    ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
+    ws = new WebSocket('wss://api.derivws.com/trading/v1/options/ws/public');
 
     var debugPanel = document.getElementById('debugPanel');
     function logDebug(label, obj) {
@@ -266,7 +266,7 @@
     }
 
     ws.onopen = function() {
-      logDebug('WebSocket opened');
+      logDebug('WebSocket opened (public endpoint, no auth needed)');
       status.textContent = 'Requesting live ticks…';
       populateSymbolSelect(KNOWN_SYNTHETICS);
       symbolSelect.value = PREFERRED_SYMBOL;
@@ -278,7 +278,7 @@
       logDebug('RAW message', msg);
 
       if (msg.error) {
-        status.textContent = 'Feed error: ' + msg.error.message;
+        status.textContent = 'Error: ' + msg.error.message;
         dot.style.background = '#e34948';
         showUnavailable(currentSymbol || PREFERRED_SYMBOL, KNOWN_SYNTHETICS, msg.error.message);
         return;
